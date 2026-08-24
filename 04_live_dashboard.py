@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 import kinematics
 import mapping
 import trajectory
-from config import L1, L2, X0, X1, Y0, Y1
+from config import L1, L2, X0, X1, Y0, Y1, IMG_TARGET_SIZE
 
 lineart = importlib.import_module("01_make_lineart")
 
@@ -54,6 +54,8 @@ state = {
     "loaded": False,
     "w": None, "h": None,
     "default_speed": 1.0,
+    "vision_stages": None,  # dict of stage-name -> base64 PNG, for the upload reveal
+    "dropped_by_stroke": {},  # output stroke_index -> list of dropped-point dicts
 }
 state_lock = threading.Lock()
 
@@ -69,21 +71,36 @@ def load_pipeline(image_path: str) -> int:
     if image is None:
         raise FileNotFoundError(f"could not read image: {image_path}")
 
-    ordered_strokes_px, preview, w, h = lineart.process_image(image_path)
-    strokes_arm = mapping.strokes_to_arm(ordered_strokes_px, w, h)
+    resized = cv2.resize(image, IMG_TARGET_SIZE)
+    stages_result = lineart.extract_strokes_with_stages(resized)
+    ordered_strokes_px = stages_result["ordered_strokes"]
+    w, h = stages_result["width"], stages_result["height"]
+
+    vision_stages_b64 = {
+        name: base64.b64encode(cv2.imencode(".png", img)[1].tobytes()).decode("ascii")
+        for name, img in stages_result["stages"].items()
+    }
+
+    strokes_arm, dropped = mapping.strokes_to_arm(ordered_strokes_px, w, h, collect_dropped=True)
     if not strokes_arm:
         raise RuntimeError("no reachable strokes produced from image; nothing to draw")
 
     samples = trajectory.generate_trajectory(strokes_arm)
     stroke_index_per_sample = _assign_stroke_indices(strokes_arm, samples)
 
+    dropped_by_stroke: dict[int, list[dict]] = {}
+    for d in dropped:
+        dropped_by_stroke.setdefault(d["stroke_index"], []).append(d)
+
     with state_lock:
         state["generation"] += 1
         gen = state["generation"]
         state["image_bytes"] = cv2.imencode(".png", image)[1].tobytes()
+        state["vision_stages"] = vision_stages_b64
         state["strokes_px"] = [s.tolist() for s in ordered_strokes_px]
         state["samples"] = samples
         state["stroke_ranges"] = stroke_index_per_sample
+        state["dropped_by_stroke"] = dropped_by_stroke
         state["w"], state["h"] = w, h
         state["history"] = []
         state["done"] = False
@@ -132,10 +149,27 @@ def playback_worker(speed: float, generation: int):
     newer image gets loaded mid-run (generation mismatch)."""
     delay = SECONDS_PER_SAMPLE / max(speed, 1e-6)
     samples = state["samples"]
+    stroke_ranges = state["stroke_ranges"]
+    dropped_by_stroke = state["dropped_by_stroke"]
     total = len(samples)
+    prev_stroke_index = None
     for i in range(total):
         if state["generation"] != generation:
             return  # a newer photo was uploaded; this run is stale
+
+        stroke_index = stroke_ranges[i]
+        if stroke_index != prev_stroke_index:
+            for d in dropped_by_stroke.get(stroke_index, []):
+                x, y = d["arm"]
+                warn_msg = {
+                    "type": "warning",
+                    "text": f"⚠ point ({x:.3f}, {y:.3f}) unreachable — skipped",
+                    "stroke_index": stroke_index,
+                }
+                state["history"].append(warn_msg)
+                broadcast_queue.put(warn_msg)
+            prev_stroke_index = stroke_index
+
         msg = _sample_to_dict(i)
         state["history"].append(msg)
         broadcast_queue.put(msg)
@@ -205,8 +239,13 @@ async def api_strokes():
     return JSONResponse({"strokes": state["strokes_px"] or []})
 
 
+@app.get("/api/vision-stages")
+async def api_vision_stages():
+    return JSONResponse({"stages": state["vision_stages"] or {}})
+
+
 @app.post("/api/upload")
-async def api_upload(file: UploadFile = File(...), speed: float = 1.0):
+async def api_upload(file: UploadFile = File(...)):
     ext = os.path.splitext(file.filename or "")[1] or ".png"
     dest_path = os.path.join(UPLOAD_DIR, f"upload_{int(time.time() * 1000)}{ext}")
     with open(dest_path, "wb") as f:
@@ -219,12 +258,20 @@ async def api_upload(file: UploadFile = File(...), speed: float = 1.0):
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
 
-    # Tell every connected client to wipe their canvases before the new
-    # stream of samples starts arriving.
+    # Tell every connected client to wipe their canvases now, but do NOT
+    # start playback yet — the frontend plays the vision-stages reveal
+    # first and calls /api/start-playback once that finishes.
     broadcast_queue.put({"type": "reset", "generation": gen})
-    start_playback(speed)
 
     return JSONResponse({"ok": True, "generation": gen, "total_samples": len(state["samples"])})
+
+
+@app.post("/api/start-playback")
+async def api_start_playback(speed: float = 1.0):
+    if not state["loaded"]:
+        return JSONResponse({"error": "no image loaded yet"}, status_code=400)
+    start_playback(speed)
+    return JSONResponse({"ok": True, "generation": state["generation"]})
 
 
 @app.websocket("/ws")

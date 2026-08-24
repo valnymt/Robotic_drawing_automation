@@ -175,6 +175,12 @@
 
   <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
 
+  <div class="panel" id="revealPanel" style="display:none; margin-bottom:14px;">
+    <h2>vision pipeline <span class="tag" id="revealTag">planning…</span></h2>
+    <img id="revealImg" class="photo" style="max-width:400px; margin:0 auto; opacity:0; transition:opacity 150ms ease;">
+    <div id="revealLabel" style="text-align:center; font-size:11px; color:var(--text-dim); margin-top:8px; text-transform:uppercase; letter-spacing:.06em;"></div>
+  </div>
+
   <div class="grid">
     <div class="panel">
       <h2>photo <span class="tag" id="photoTag"></span></h2>
@@ -382,13 +388,54 @@ function applySample(s) {
   );
 }
 
-async function replayHistory(samples, done) {
+async function replayHistory(historyItems, done) {
   clearAllPanels();
-  samples.forEach(applySample);
+  // history is a mix of "sample" and "warning" entries, in original order.
+  historyItems.forEach(item => {
+    if (item.type === 'warning') {
+      logLine(item.text, 'event');
+    } else {
+      applySample(item);
+    }
+  });
   if (done) {
     setStatus('drawing complete', 'accent');
     liveDot.classList.remove('live');
   }
+}
+
+// --- Vision-pipeline reveal ---
+const STAGE_ORDER = [
+  ['blurred', 'gaussian blur'],
+  ['edges', 'canny edges'],
+  ['raw_contours', 'raw contours'],
+  ['simplified', 'simplified (douglas-peucker)'],
+  ['ordered', 'stroke order'],
+];
+const STAGE_FADE_MS = 150;
+const STAGE_HOLD_MS = 700;
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function playVisionReveal(stagesB64) {
+  const panel = document.getElementById('revealPanel');
+  const img = document.getElementById('revealImg');
+  const label = document.getElementById('revealLabel');
+  panel.style.display = 'block';
+
+  for (const [key, text] of STAGE_ORDER) {
+    const b64 = stagesB64[key];
+    if (!b64) continue;
+    img.style.opacity = '0';
+    await sleep(STAGE_FADE_MS);
+    img.src = `data:image/png;base64,${b64}`;
+    label.textContent = text;
+    await sleep(20);
+    img.style.opacity = '1';
+    await sleep(STAGE_HOLD_MS);
+  }
+
+  panel.style.display = 'none';
 }
 
 // --- Upload handling ---
@@ -396,19 +443,26 @@ async function uploadFile(file) {
   logLine(`▸ uploading ${file.name}…`, 'event');
   const form = new FormData();
   form.append('file', file);
-  const speed = speedSelect.value;
   try {
-    const res = await fetch(`/api/upload?speed=${speed}`, { method: 'POST', body: form });
+    const res = await fetch('/api/upload', { method: 'POST', body: form });
     const data = await res.json();
     if (!res.ok) {
       logLine(`✕ ${data.error || 'upload failed'}`, 'event');
       return;
     }
     clearAllPanels();
-    setStatus('new photo loaded — planning strokes…', 'accent');
-    liveDot.classList.add('live');
+    setStatus('planning — analyzing image…', 'accent');
+    liveDot.classList.remove('live');
     await loadStatics();
-    logLine(`▸ loaded: ${strokes.length} strokes, ${data.total_samples} samples — drawing…`, 'event');
+    logLine(`▸ loaded: ${strokes.length} strokes, ${data.total_samples} samples`, 'event');
+
+    const stagesRes = await fetch('/api/vision-stages').then(r => r.json());
+    await playVisionReveal(stagesRes.stages);
+
+    setStatus('drawing…', 'accent');
+    liveDot.classList.add('live');
+    logLine('▸ starting to draw…', 'event');
+    await fetch(`/api/start-playback?speed=${speedSelect.value}`, { method: 'POST' });
   } catch (e) {
     logLine(`✕ upload error: ${e}`, 'event');
   }
@@ -455,10 +509,16 @@ function connect() {
     } else if (msg.type === 'reset') {
       clearAllPanels();
       currentGeneration = msg.generation;
-      setStatus('drawing…', 'accent');
-      liveDot.classList.add('live');
+      setStatus('planning — analyzing image…', 'accent');
+      liveDot.classList.remove('live');
     } else if (msg.type === 'sample') {
+      if (!liveDot.classList.contains('live')) {
+        setStatus('drawing…', 'accent');
+        liveDot.classList.add('live');
+      }
       applySample(msg);
+    } else if (msg.type === 'warning') {
+      logLine(msg.text, 'event');
     } else if (msg.type === 'done') {
       setStatus('drawing complete', 'accent');
       liveDot.classList.remove('live');

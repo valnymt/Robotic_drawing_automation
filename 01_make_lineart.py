@@ -25,28 +25,77 @@ from config import (
 MIN_CONTOUR_POINTS = 2
 
 
-def extract_strokes(image: np.ndarray) -> list[np.ndarray]:
-    """Photo (BGR or grayscale) -> list of Nx2 int32 polylines in pixel coords."""
+def extract_strokes_with_stages(image: np.ndarray) -> dict:
+    """Photo (BGR or grayscale) -> every intermediate stage of the CV
+    pipeline, so a caller (e.g. the live dashboard's "vision reveal")
+    can show how the final stroke plan was actually reached, not just
+    the end result.
+
+    Returns:
+        {
+          "raw_strokes": list of Nx2 int32 polylines, pre-ordering
+          "ordered_strokes": same strokes, greedy-nearest-neighbor ordered
+          "width": int, "height": int,
+          "stages": {
+              "blurred":      BGR preview of the Gaussian-blurred grayscale,
+              "edges":        BGR preview of the Canny edge map,
+              "raw_contours": BGR preview of cv2.findContours output,
+              "simplified":   BGR preview after approxPolyDP, pre-ordering,
+              "ordered":      the existing numbered/colored render_preview(),
+          },
+        }
+    """
     if image.ndim == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image
+    h, w = gray.shape[:2]
 
     blurred = cv2.GaussianBlur(gray, GAUSSIAN_BLUR_KSIZE, 0)
     edges = cv2.Canny(blurred, CANNY_LOW, CANNY_HIGH)
 
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
-    strokes = []
+    raw_contours_preview = np.full((h, w, 3), 255, dtype=np.uint8)
+    cv2.drawContours(raw_contours_preview, contours, -1, (150, 150, 150), 1)
+
+    raw_strokes = []
     for contour in contours:
         arc_len = cv2.arcLength(contour, closed=False)
         epsilon = APPROX_POLY_EPS_FRAC * max(arc_len, 1e-6)
         simplified = cv2.approxPolyDP(contour, epsilon, closed=False)
         pts = simplified.reshape(-1, 2)
         if len(pts) >= MIN_CONTOUR_POINTS:
-            strokes.append(pts.astype(np.int32))
+            raw_strokes.append(pts.astype(np.int32))
 
-    return strokes
+    simplified_preview = np.full((h, w, 3), 255, dtype=np.uint8)
+    for stroke in raw_strokes:
+        cv2.polylines(simplified_preview, [stroke], isClosed=False, color=(60, 60, 60), thickness=1)
+
+    ordered_strokes = order_strokes(raw_strokes)
+    ordered_preview = render_preview((h, w), ordered_strokes)
+
+    return {
+        "raw_strokes": raw_strokes,
+        "ordered_strokes": ordered_strokes,
+        "width": w,
+        "height": h,
+        "stages": {
+            "blurred": cv2.cvtColor(blurred, cv2.COLOR_GRAY2BGR),
+            "edges": cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR),
+            "raw_contours": raw_contours_preview,
+            "simplified": simplified_preview,
+            "ordered": ordered_preview,
+        },
+    }
+
+
+def extract_strokes(image: np.ndarray) -> list[np.ndarray]:
+    """Photo (BGR or grayscale) -> list of Nx2 int32 polylines in pixel
+    coords (pre-ordering). Thin wrapper around
+    extract_strokes_with_stages() for callers that only need the final
+    strokes, not the intermediate stage images."""
+    return extract_strokes_with_stages(image)["raw_strokes"]
 
 
 def order_strokes(strokes: list[np.ndarray], start=(0, 0)) -> list[np.ndarray]:

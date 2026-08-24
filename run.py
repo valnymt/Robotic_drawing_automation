@@ -84,9 +84,7 @@ def run_live(image_path: str, args):
     except RuntimeError as e:
         raise PipelineError(str(e)) from e
 
-    import threading
-    thread = threading.Thread(target=dashboard.playback_worker, args=(args.speed,), daemon=True)
-    thread.start()
+    dashboard.start_playback(args.speed)
 
     import uvicorn
     print(f"serving live dashboard at http://127.0.0.1:{args.port}/")
