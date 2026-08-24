@@ -1,0 +1,111 @@
+<?xml version="1.0"?>
+<!--
+  2-DOF planar RR manipulator (draw-arm).
+  base_link -> shoulder (revolute, z-axis) -> link1 (L1 = 0.5m)
+             -> elbow (revolute, z-axis)    -> link2 (L2 = 0.4m)
+             -> pen_tip (fixed)
+  Matches the DH table in robotics_theory_reference.md section 2:
+  both links have alpha=0, d=0 (flat, planar chain).
+-->
+<robot name="draw_arm">
+
+  <material name="base_grey">
+    <color rgba="0.35 0.35 0.35 1.0"/>
+  </material>
+  <material name="link_blue">
+    <color rgba="0.15 0.45 0.75 1.0"/>
+  </material>
+  <material name="pen_red">
+    <color rgba="0.8 0.15 0.15 1.0"/>
+  </material>
+
+  <link name="base_link">
+    <visual>
+      <geometry><cylinder radius="0.06" length="0.05"/></geometry>
+      <origin xyz="0 0 0.025" rpy="0 0 0"/>
+      <material name="base_grey"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.06" length="0.05"/></geometry>
+      <origin xyz="0 0 0.025" rpy="0 0 0"/>
+    </collision>
+    <inertial>
+      <mass value="1.0"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
+    </inertial>
+  </link>
+
+  <!-- link1: shoulder -> elbow, length L1 = 0.5m along local x -->
+  <link name="link1">
+    <visual>
+      <geometry><box size="0.5 0.03 0.03"/></geometry>
+      <origin xyz="0.25 0 0" rpy="0 0 0"/>
+      <material name="link_blue"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.5 0.03 0.03"/></geometry>
+      <origin xyz="0.25 0 0" rpy="0 0 0"/>
+    </collision>
+    <inertial>
+      <mass value="0.4"/>
+      <origin xyz="0.25 0 0"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+  </link>
+
+  <joint name="shoulder" type="revolute">
+    <parent link="base_link"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14159" upper="3.14159" effort="10" velocity="5"/>
+  </joint>
+
+  <!-- link2: elbow -> pen tip, length L2 = 0.4m along local x -->
+  <link name="link2">
+    <visual>
+      <geometry><box size="0.4 0.025 0.025"/></geometry>
+      <origin xyz="0.2 0 0" rpy="0 0 0"/>
+      <material name="link_blue"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.4 0.025 0.025"/></geometry>
+      <origin xyz="0.2 0 0" rpy="0 0 0"/>
+    </collision>
+    <inertial>
+      <mass value="0.25"/>
+      <origin xyz="0.2 0 0"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.006" iyz="0" izz="0.006"/>
+    </inertial>
+  </link>
+
+  <joint name="elbow" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="0.5 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14159" upper="3.14159" effort="10" velocity="5"/>
+  </joint>
+
+  <!-- pen_tip: fixed at the end of link2, this is the point IK solves for -->
+  <link name="pen_tip">
+    <visual>
+      <geometry><sphere radius="0.012"/></geometry>
+      <material name="pen_red"/>
+    </visual>
+    <collision>
+      <geometry><sphere radius="0.012"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.02"/>
+      <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+    </inertial>
+  </link>
+
+  <joint name="pen_tip_fixed" type="fixed">
+    <parent link="link2"/>
+    <child link="pen_tip"/>
+    <origin xyz="0.4 0 0" rpy="0 0 0"/>
+  </joint>
+
+</robot>

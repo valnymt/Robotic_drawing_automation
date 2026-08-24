@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv311/
+.venv/
+
+# generated pipeline output — reproducible from source images
+*_drawing.mp4
+*_topdown.png
+*_overlay.png
+*_strokes.json
+*_preview.png
+debug_*.png
+
+.claude/

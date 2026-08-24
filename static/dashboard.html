@@ -1,0 +1,481 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>draw-arm — live</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap">
+<style>
+  :root {
+    --bg: #0b0d0c;
+    --panel: #121614;
+    --panel-2: #171c19;
+    --border: #23302a;
+    --text: #d9e6df;
+    --text-dim: #6f8279;
+    --accent: #5eead4;
+    --accent-dim: #1f4a42;
+    --warn: #f5a742;
+    --danger: #f2495c;
+    --ink: #eef2ee;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --display: 'Space Grotesk', ui-sans-serif, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    padding: 20px;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  h1 {
+    font-family: var(--display);
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0;
+    letter-spacing: -.01em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h1 .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--text-dim);
+    box-shadow: 0 0 0 0 rgba(94,234,212,0);
+    transition: background .2s, box-shadow .2s;
+  }
+  h1 .dot.live {
+    background: var(--accent);
+    box-shadow: 0 0 10px 2px rgba(94,234,212,.5);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  .status-line {
+    font-size: 12px; color: var(--text-dim);
+  }
+  .status-line .val { color: var(--accent); }
+  .status-line .warn { color: var(--warn); }
+
+  .uploader {
+    border: 1.5px dashed var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+    padding: 22px;
+    text-align: center;
+    margin-bottom: 20px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .uploader.dragover { border-color: var(--accent); background: var(--accent-dim); }
+  .uploader .title { font-family: var(--display); font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .uploader .sub { font-size: 12px; color: var(--text-dim); }
+  .uploader input[type=file] { display: none; }
+  .controls {
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    margin-top: 14px; flex-wrap: wrap;
+  }
+  .controls label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .06em; }
+  select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; font-family: var(--mono); font-size: 12px;
+  }
+
+  .progress-wrap {
+    height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden;
+    margin-bottom: 20px; border: 1px solid var(--border);
+  }
+  .progress-bar {
+    height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+    transition: width .12s linear;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr) 320px;
+    gap: 14px;
+    align-items: start;
+  }
+  @media (max-width: 1100px) { .grid { grid-template-columns: 1fr 1fr; } }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  .panel h2 {
+    font-family: var(--display);
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--text-dim); margin: 0 0 8px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel h2 .tag { color: var(--accent); font-family: var(--mono); font-weight: 600; }
+  canvas, img.photo {
+    display: block; width: 100%; height: auto;
+    background: #08090a; border-radius: 6px; border: 1px solid var(--border);
+  }
+  .empty-hint {
+    display: flex; align-items: center; justify-content: center;
+    height: 220px; color: var(--text-dim); font-size: 12px; text-align: center;
+  }
+
+  .feed-panel { grid-row: span 2; display: flex; flex-direction: column; height: 100%; }
+  #feed {
+    flex: 1;
+    min-height: 420px; max-height: 620px;
+    overflow-y: auto;
+    font-size: 11.5px; line-height: 1.6;
+    background: #08090a; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px;
+  }
+  #feed .line { white-space: pre; }
+  #feed .line .f { color: var(--text-dim); }
+  #feed .line .down { color: var(--accent); }
+  #feed .line .up { color: var(--text-dim); }
+  #feed .line.event { color: var(--warn); }
+  #feed::-webkit-scrollbar { width: 6px; }
+  #feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .meta-row {
+    font-size: 11px; color: var(--text-dim); margin-top: 16px;
+    display: flex; gap: 18px; flex-wrap: wrap;
+  }
+  .meta-row b { color: var(--text); }
+</style>
+</head>
+<body>
+  <header>
+    <h1><span class="dot" id="liveDot"></span> draw-arm — live</h1>
+    <div class="status-line" id="status">connecting…</div>
+  </header>
+
+  <div class="uploader" id="uploader">
+    <div class="title">drop a photo here, or click to choose one</div>
+    <div class="sub">any image — the arm will re-plan and redraw from scratch</div>
+    <input type="file" id="fileInput" accept="image/*">
+    <div class="controls">
+      <label for="speedSelect">playback speed</label>
+      <select id="speedSelect">
+        <option value="0.15">0.15× (slow)</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="3">3×</option>
+        <option value="10">10× (fast)</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>photo <span class="tag" id="photoTag"></span></h2>
+      <div id="photoWrap"><div class="empty-hint">no photo loaded yet</div></div>
+    </div>
+    <div class="panel">
+      <h2>stroke plan <span class="tag" id="strokeTag"></span></h2>
+      <canvas id="strokeCanvas" width="400" height="400"></canvas>
+    </div>
+    <div class="panel feed-panel">
+      <h2>decision feed <span class="tag" id="feedTag">idle</span></h2>
+      <div id="feed"></div>
+    </div>
+    <div class="panel">
+      <h2>arm pose <span class="tag" id="armTag"></span></h2>
+      <canvas id="armCanvas" width="400" height="400"></canvas>
+    </div>
+    <div class="panel">
+      <h2>ink canvas <span class="tag" id="inkTag"></span></h2>
+      <canvas id="inkCanvas" width="400" height="400"></canvas>
+    </div>
+  </div>
+
+  <div class="meta-row" id="meta"></div>
+
+<script>
+const statusEl = document.getElementById('status');
+const liveDot = document.getElementById('liveDot');
+const metaEl = document.getElementById('meta');
+const feedEl = document.getElementById('feed');
+const feedTag = document.getElementById('feedTag');
+const progressBar = document.getElementById('progressBar');
+const strokeCanvas = document.getElementById('strokeCanvas');
+const armCanvas = document.getElementById('armCanvas');
+const inkCanvas = document.getElementById('inkCanvas');
+const strokeCtx = strokeCanvas.getContext('2d');
+const armCtx = armCanvas.getContext('2d');
+const inkCtx = inkCanvas.getContext('2d');
+const photoWrap = document.getElementById('photoWrap');
+const uploader = document.getElementById('uploader');
+const fileInput = document.getElementById('fileInput');
+const speedSelect = document.getElementById('speedSelect');
+
+let meta = null;
+let strokes = [];
+let prevPoint = null;
+let currentGeneration = -1;
+
+function setStatus(text, tone) {
+  statusEl.innerHTML = `${text}`;
+  statusEl.style.color = tone === 'warn' ? 'var(--warn)' : tone === 'accent' ? 'var(--accent)' : 'var(--text-dim)';
+}
+
+function logLine(html, cls) {
+  const div = document.createElement('div');
+  div.className = 'line' + (cls ? ' ' + cls : '');
+  div.innerHTML = html;
+  feedEl.appendChild(div);
+  feedEl.scrollTop = feedEl.scrollHeight;
+  while (feedEl.childElementCount > 400) feedEl.removeChild(feedEl.firstChild);
+}
+
+function clearAllPanels() {
+  strokeCtx.clearRect(0, 0, strokeCanvas.width, strokeCanvas.height);
+  armCtx.clearRect(0, 0, armCanvas.width, armCanvas.height);
+  clearInk();
+  feedEl.innerHTML = '';
+  progressBar.style.width = '0%';
+  prevPoint = null;
+}
+
+async function loadStatics() {
+  const [metaRes, photoRes, strokesRes] = await Promise.all([
+    fetch('/api/meta').then(r => r.json()),
+    fetch('/api/photo').then(r => r.json()),
+    fetch('/api/strokes').then(r => r.json()),
+  ]);
+  meta = metaRes;
+  strokes = strokesRes.strokes || [];
+  currentGeneration = meta.generation;
+
+  if (photoRes.image_b64) {
+    photoWrap.innerHTML = `<img class="photo" src="data:image/png;base64,${photoRes.image_b64}">`;
+  } else {
+    photoWrap.innerHTML = `<div class="empty-hint">no photo loaded yet</div>`;
+  }
+
+  if (meta.loaded) {
+    metaEl.innerHTML =
+      `L1=<b>${meta.L1}</b> L2=<b>${meta.L2}</b> · workspace x[<b>${meta.X0}, ${meta.X1}</b>] y[<b>${meta.Y0}, ${meta.Y1}</b>] · ` +
+      `strokes=<b>${strokes.length}</b> · samples=<b>${meta.total_samples}</b>`;
+    document.getElementById('strokeTag').textContent = `${strokes.length} strokes`;
+    document.getElementById('inkTag').textContent = `0 / ${meta.total_samples}`;
+    document.getElementById('armTag').textContent = `waiting`;
+    drawStrokePlan(-1);
+    clearInk();
+  } else {
+    metaEl.textContent = 'no image loaded — upload a photo to begin';
+  }
+}
+
+function drawStrokePlan(activeStrokeIndex) {
+  const c = strokeCanvas, ctx = strokeCtx;
+  ctx.clearRect(0, 0, c.width, c.height);
+  if (!meta || !meta.loaded) return;
+  const sx = c.width / meta.img_w, sy = c.height / meta.img_h;
+
+  strokes.forEach((stroke, i) => {
+    ctx.beginPath();
+    stroke.forEach(([x, y], j) => {
+      const px = x * sx, py = y * sy;
+      if (j === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    });
+    if (i === activeStrokeIndex) {
+      ctx.strokeStyle = '#5eead4'; ctx.lineWidth = 2.4;
+    } else if (i < activeStrokeIndex) {
+      ctx.strokeStyle = '#2c6358'; ctx.lineWidth = 1;
+    } else {
+      ctx.strokeStyle = '#26302b'; ctx.lineWidth = 1;
+    }
+    ctx.stroke();
+  });
+}
+
+function drawArm(t1, t2) {
+  const c = armCanvas, ctx = armCtx;
+  ctx.clearRect(0, 0, c.width, c.height);
+  if (!meta || !meta.loaded) return;
+
+  const reach = meta.L1 + meta.L2;
+  const scale = (Math.min(c.width, c.height) * 0.42) / reach;
+  const originX = c.width * 0.28, originY = c.height * 0.5;
+  const toPx = (x, y) => [originX + x * scale, originY - y * scale];
+
+  const [bx, by] = toPx(0, 0);
+  const j1x = meta.L1 * Math.cos(t1), j1y = meta.L1 * Math.sin(t1);
+  const [ex, ey] = toPx(j1x, j1y);
+  const tx = j1x + meta.L2 * Math.cos(t1 + t2), ty = j1y + meta.L2 * Math.sin(t1 + t2);
+  const [px, py] = toPx(tx, ty);
+
+  const [wx0, wy0] = toPx(meta.X0, meta.Y0);
+  const [wx1, wy1] = toPx(meta.X1, meta.Y1);
+  ctx.strokeStyle = '#1c2320';
+  ctx.strokeRect(Math.min(wx0, wx1), Math.min(wy0, wy1), Math.abs(wx1 - wx0), Math.abs(wy1 - wy0));
+
+  ctx.lineWidth = 6; ctx.lineCap = 'round';
+  ctx.strokeStyle = '#2c6358';
+  ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.strokeStyle = '#5eead4';
+  ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(px, py); ctx.stroke();
+
+  ctx.fillStyle = '#d9e6df';
+  ctx.beginPath(); ctx.arc(bx, by, 6, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(ex, ey, 4, 0, 7); ctx.fill();
+  ctx.fillStyle = '#5eead4';
+  ctx.shadowColor = '#5eead4'; ctx.shadowBlur = 8;
+  ctx.beginPath(); ctx.arc(px, py, 5, 0, 7); ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function armToInkPx(x, y) {
+  const c = inkCanvas;
+  const fx = (x - meta.X0) / (meta.X1 - meta.X0);
+  const fy = (y - meta.Y0) / (meta.Y1 - meta.Y0);
+  return [fx * c.width, (1 - fy) * c.height];
+}
+
+function clearInk() {
+  inkCtx.fillStyle = '#08090a';
+  inkCtx.fillRect(0, 0, inkCanvas.width, inkCanvas.height);
+}
+
+function drawInkSegment(x0, y0, x1, y1) {
+  const [px0, py0] = armToInkPx(x0, y0);
+  const [px1, py1] = armToInkPx(x1, y1);
+  inkCtx.strokeStyle = '#eef2ee';
+  inkCtx.lineWidth = 1.6;
+  inkCtx.lineCap = 'round';
+  inkCtx.beginPath();
+  inkCtx.moveTo(px0, py0);
+  inkCtx.lineTo(px1, py1);
+  inkCtx.stroke();
+}
+
+function deg(r) { return (r * 180 / Math.PI).toFixed(1); }
+
+function applySample(s) {
+  drawArm(s.t1, s.t2);
+  drawStrokePlan(s.stroke_index);
+  if (s.pen_down && prevPoint) {
+    drawInkSegment(prevPoint[0], prevPoint[1], s.x, s.y);
+  }
+  prevPoint = [s.x, s.y];
+
+  const pct = meta && meta.total_samples ? (100 * (s.frame + 1) / s.total).toFixed(1) : 0;
+  progressBar.style.width = pct + '%';
+  document.getElementById('inkTag').textContent = `${s.frame + 1} / ${s.total}`;
+  document.getElementById('armTag').textContent = `θ1=${deg(s.t1)}° θ2=${deg(s.t2)}°`;
+  feedTag.textContent = s.pen_down ? 'drawing' : 'moving';
+
+  const penState = s.pen_down ? '<span class="down">● pen-down</span>' : '<span class="up">○ pen-up  </span>';
+  logLine(
+    `<span class="f">[${String(s.frame + 1).padStart(4)}/${s.total}]</span> stroke ${String(s.stroke_index).padStart(2)}  ${penState}  ` +
+    `θ=(${deg(s.t1)}°, ${deg(s.t2)}°)  →  (${s.x.toFixed(3)}, ${s.y.toFixed(3)})`
+  );
+}
+
+async function replayHistory(samples, done) {
+  clearAllPanels();
+  samples.forEach(applySample);
+  if (done) {
+    setStatus('drawing complete', 'accent');
+    liveDot.classList.remove('live');
+  }
+}
+
+// --- Upload handling ---
+async function uploadFile(file) {
+  logLine(`▸ uploading ${file.name}…`, 'event');
+  const form = new FormData();
+  form.append('file', file);
+  const speed = speedSelect.value;
+  try {
+    const res = await fetch(`/api/upload?speed=${speed}`, { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      logLine(`✕ ${data.error || 'upload failed'}`, 'event');
+      return;
+    }
+    clearAllPanels();
+    setStatus('new photo loaded — planning strokes…', 'accent');
+    liveDot.classList.add('live');
+    await loadStatics();
+    logLine(`▸ loaded: ${strokes.length} strokes, ${data.total_samples} samples — drawing…`, 'event');
+  } catch (e) {
+    logLine(`✕ upload error: ${e}`, 'event');
+  }
+}
+
+uploader.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) uploadFile(fileInput.files[0]); });
+['dragenter', 'dragover'].forEach(ev => uploader.addEventListener(ev, e => {
+  e.preventDefault(); uploader.classList.add('dragover');
+}));
+['dragleave', 'drop'].forEach(ev => uploader.addEventListener(ev, e => {
+  e.preventDefault(); uploader.classList.remove('dragover');
+}));
+uploader.addEventListener('drop', e => {
+  const file = e.dataTransfer.files[0];
+  if (file) uploadFile(file);
+});
+
+// --- WebSocket with graceful reconnect ---
+let ws = null;
+let reconnectDelay = 1000;
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.onopen = () => {
+    setStatus('connected', 'accent');
+    liveDot.classList.add('live');
+    reconnectDelay = 1000;
+  };
+
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'history') {
+      if (msg.loaded) {
+        await loadStatics();
+        replayHistory(msg.samples, msg.done);
+        if (!msg.done && msg.samples.length) {
+          setStatus('reconnected — resuming live', 'accent');
+        }
+      } else {
+        setStatus('waiting for a photo…', null);
+      }
+    } else if (msg.type === 'reset') {
+      clearAllPanels();
+      currentGeneration = msg.generation;
+      setStatus('drawing…', 'accent');
+      liveDot.classList.add('live');
+    } else if (msg.type === 'sample') {
+      applySample(msg);
+    } else if (msg.type === 'done') {
+      setStatus('drawing complete', 'accent');
+      liveDot.classList.remove('live');
+      logLine('▸ drawing complete', 'event');
+    }
+  };
+
+  ws.onclose = () => {
+    liveDot.classList.remove('live');
+    setStatus(`disconnected — retrying in ${Math.round(reconnectDelay / 1000)}s`, 'warn');
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
+  };
+  ws.onerror = () => ws.close();
+}
+
+loadStatics().then(connect);
+</script>
+</body>
+</html>
