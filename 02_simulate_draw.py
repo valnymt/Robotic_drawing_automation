@@ -71,6 +71,10 @@ MIN_SEGMENT_LENGTH = 1e-5
 def add_segment(p1: tuple, p2: tuple, color=INK_COLOR, width: float = 3.0):
     """Draw 'ink' between two 3D points as real, camera-visible geometry.
 
+    Returns the created body's unique id (so a caller can track and
+    later p.removeBody() it, e.g. to clear ink between drawings), or
+    None if the segment was too short to draw.
+
     NOTE: p.addUserDebugLine() is a visualizer-only overlay and does NOT
     appear in p.getCameraImage() output under a DIRECT (headless)
     connection (confirmed empirically: 0 rendered pixels regardless of
@@ -82,7 +86,7 @@ def add_segment(p1: tuple, p2: tuple, color=INK_COLOR, width: float = 3.0):
     diff = p2 - p1
     length = float(np.linalg.norm(diff))
     if length < MIN_SEGMENT_LENGTH:
-        return
+        return None
 
     mid = ((p1 + p2) / 2).tolist()
     mid[2] = CANVAS_Z + INK_HALF_HEIGHT
@@ -92,7 +96,7 @@ def add_segment(p1: tuple, p2: tuple, color=INK_COLOR, width: float = 3.0):
     half_extents = [length / 2, INK_HALF_THICKNESS, INK_HALF_HEIGHT]
     rgba = list(color) + [1.0] if len(color) == 3 else list(color)
     visual_shape = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, rgbaColor=rgba)
-    p.createMultiBody(
+    return p.createMultiBody(
         baseMass=0,
         baseVisualShapeIndex=visual_shape,
         basePosition=mid,

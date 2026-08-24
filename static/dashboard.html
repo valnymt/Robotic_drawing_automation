@@ -87,6 +87,18 @@
     background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 8px; font-family: var(--mono); font-size: 12px;
   }
+  .ctrl-btn {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 12px; font-family: var(--mono); font-size: 12px;
+    cursor: pointer;
+  }
+  .ctrl-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .ctrl-btn:disabled { opacity: .4; cursor: not-allowed; }
+  input[type="range"] {
+    accent-color: var(--accent);
+    background: transparent;
+  }
+  input[type="range"]:disabled { opacity: .4; }
 
   .progress-wrap {
     height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden;
@@ -95,6 +107,24 @@
   .progress-bar {
     height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent-dim), var(--accent));
     transition: width .12s linear;
+  }
+
+  .accuracy-row {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 20px; font-size: 11px; color: var(--text-dim);
+  }
+  .accuracy-row .label { text-transform: uppercase; letter-spacing: .06em; }
+  .accuracy-bar-wrap {
+    flex: 1; height: 4px; background: var(--panel-2); border-radius: 3px;
+    overflow: hidden; border: 1px solid var(--border);
+  }
+  .accuracy-bar {
+    height: 100%; width: 0%; background: var(--accent);
+    transition: width .3s ease-out;
+  }
+  .accuracy-value {
+    font-family: var(--mono); font-size: 12px; color: var(--accent);
+    min-width: 4.5em; text-align: right; font-variant-numeric: tabular-nums;
   }
 
   .grid {
@@ -118,6 +148,12 @@
     display: flex; justify-content: space-between; align-items: center;
   }
   .panel h2 .tag { color: var(--accent); font-family: var(--mono); font-weight: 600; }
+  .view-toggle {
+    background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+    padding: 2px 7px; border-radius: 4px; cursor: pointer;
+  }
+  .view-toggle:hover { color: var(--accent); border-color: var(--accent); }
   canvas, img.photo {
     display: block; width: 100%; height: auto;
     background: #08090a; border-radius: 6px; border: 1px solid var(--border);
@@ -170,10 +206,24 @@
         <option value="3">3×</option>
         <option value="10">10× (fast)</option>
       </select>
+      <button class="ctrl-btn" id="pauseResumeBtn" type="button" disabled>pause</button>
+      <button class="ctrl-btn" id="stepBtn" type="button" disabled>step ▸</button>
     </div>
   </div>
 
   <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+
+  <div class="accuracy-row">
+    <span class="label">traced</span>
+    <div class="accuracy-bar-wrap"><div class="accuracy-bar" id="accuracyBar"></div></div>
+    <span class="accuracy-value" id="accuracyValue">0.0%</span>
+  </div>
+
+  <div class="accuracy-row">
+    <span class="label">scrub</span>
+    <input type="range" id="scrubber" min="0" max="0" value="0" step="1" style="flex:1;" disabled>
+    <span class="accuracy-value" id="scrubberValue">0 / 0</span>
+  </div>
 
   <div class="panel" id="revealPanel" style="display:none; margin-bottom:14px;">
     <h2>vision pipeline <span class="tag" id="revealTag">planning…</span></h2>
@@ -195,8 +245,15 @@
       <div id="feed"></div>
     </div>
     <div class="panel">
-      <h2>arm pose <span class="tag" id="armTag"></span></h2>
-      <canvas id="armCanvas" width="400" height="400"></canvas>
+      <h2>
+        <span>arm pose</span>
+        <span style="display:flex; align-items:center; gap:8px;">
+          <span class="tag" id="armTag"></span>
+          <button class="view-toggle" id="armViewToggle" type="button">schematic</button>
+        </span>
+      </h2>
+      <img id="arm3d" class="photo">
+      <canvas id="armCanvas" width="400" height="400" style="display:none;"></canvas>
     </div>
     <div class="panel">
       <h2>ink canvas <span class="tag" id="inkTag"></span></h2>
@@ -213,8 +270,16 @@ const metaEl = document.getElementById('meta');
 const feedEl = document.getElementById('feed');
 const feedTag = document.getElementById('feedTag');
 const progressBar = document.getElementById('progressBar');
+const accuracyBar = document.getElementById('accuracyBar');
+const accuracyValue = document.getElementById('accuracyValue');
 const strokeCanvas = document.getElementById('strokeCanvas');
 const armCanvas = document.getElementById('armCanvas');
+const arm3dImg = document.getElementById('arm3d');
+const armViewToggle = document.getElementById('armViewToggle');
+const pauseResumeBtn = document.getElementById('pauseResumeBtn');
+const stepBtn = document.getElementById('stepBtn');
+const scrubber = document.getElementById('scrubber');
+const scrubberValue = document.getElementById('scrubberValue');
 const inkCanvas = document.getElementById('inkCanvas');
 const strokeCtx = strokeCanvas.getContext('2d');
 const armCtx = armCanvas.getContext('2d');
@@ -228,6 +293,9 @@ let meta = null;
 let strokes = [];
 let prevPoint = null;
 let currentGeneration = -1;
+let sampleHistory = [];       // every "sample" message received so far, in order — scrubber data source
+let userIsScrubbing = false;  // true once the user drags the scrubber off the live edge
+let isPaused = false;
 
 function setStatus(text, tone) {
   statusEl.innerHTML = `${text}`;
@@ -243,13 +311,37 @@ function logLine(html, cls) {
   while (feedEl.childElementCount > 400) feedEl.removeChild(feedEl.firstChild);
 }
 
+// --- Arm-pose panel: 3D sim view (default) vs. schematic trig sketch ---
+let show3D = true;
+
+function updateArmViewToggleLabel() {
+  armViewToggle.textContent = show3D ? 'schematic' : '3D sim';
+}
+armViewToggle.addEventListener('click', () => {
+  show3D = !show3D;
+  arm3dImg.style.display = show3D ? 'block' : 'none';
+  armCanvas.style.display = show3D ? 'none' : 'block';
+  updateArmViewToggleLabel();
+});
+updateArmViewToggleLabel();
+
+function setAccuracy(pct) {
+  accuracyBar.style.width = pct.toFixed(1) + '%';
+  accuracyValue.textContent = pct.toFixed(1) + '%';
+}
+
 function clearAllPanels() {
   strokeCtx.clearRect(0, 0, strokeCanvas.width, strokeCanvas.height);
   armCtx.clearRect(0, 0, armCanvas.width, armCanvas.height);
   clearInk();
   feedEl.innerHTML = '';
   progressBar.style.width = '0%';
+  setAccuracy(0);
+  arm3dImg.removeAttribute('src');
   prevPoint = null;
+  sampleHistory = [];
+  userIsScrubbing = false;
+  updateScrubberBounds();
 }
 
 async function loadStatics() {
@@ -277,8 +369,11 @@ async function loadStatics() {
     document.getElementById('armTag').textContent = `waiting`;
     drawStrokePlan(-1);
     clearInk();
+    pauseResumeBtn.disabled = false;
   } else {
     metaEl.textContent = 'no image loaded — upload a photo to begin';
+    pauseResumeBtn.disabled = true;
+    stepBtn.disabled = true;
   }
 }
 
@@ -386,20 +481,85 @@ function applySample(s) {
     `<span class="f">[${String(s.frame + 1).padStart(4)}/${s.total}]</span> stroke ${String(s.stroke_index).padStart(2)}  ${penState}  ` +
     `θ=(${deg(s.t1)}°, ${deg(s.t2)}°)  →  (${s.x.toFixed(3)}, ${s.y.toFixed(3)})`
   );
+
+  sampleHistory.push(s);
+  updateScrubberBounds();
 }
+
+// --- Scrubber: pure client-side replay of already-received samples,
+// never touches the backend. Scrubbing forward past the live edge is a
+// no-op (the slider's max is clamped to sampleHistory.length-1 and
+// grows as new samples arrive). ---
+function updateScrubberBounds() {
+  const maxIdx = Math.max(sampleHistory.length - 1, 0);
+  scrubber.max = String(maxIdx);
+  scrubber.disabled = sampleHistory.length === 0;
+  if (!userIsScrubbing) {
+    scrubber.value = String(maxIdx);
+    scrubberValue.textContent = `${sampleHistory.length} / ${sampleHistory.length}`;
+  }
+}
+
+function renderFrameAt(index) {
+  if (index < 0 || index >= sampleHistory.length) return;
+  const target = sampleHistory[index];
+
+  drawArm(target.t1, target.t2);
+  drawStrokePlan(target.stroke_index);
+
+  clearInk();
+  let pp = null;
+  for (let k = 0; k <= index; k++) {
+    const item = sampleHistory[k];
+    if (item.pen_down && pp) {
+      drawInkSegment(pp[0], pp[1], item.x, item.y);
+    }
+    pp = [item.x, item.y];
+  }
+
+  scrubberValue.textContent = `${index + 1} / ${sampleHistory.length}`;
+}
+
+scrubber.addEventListener('input', () => {
+  userIsScrubbing = true;
+  renderFrameAt(parseInt(scrubber.value, 10));
+});
+scrubber.addEventListener('change', () => {
+  // Released at the live edge -> resume auto-following new samples.
+  if (parseInt(scrubber.value, 10) >= sampleHistory.length - 1) {
+    userIsScrubbing = false;
+  }
+});
+
+// --- Pause / resume / step ---
+function setPaused(paused) {
+  isPaused = paused;
+  pauseResumeBtn.textContent = paused ? 'resume ▶' : 'pause ❚❚';
+  stepBtn.disabled = !paused;
+}
+
+pauseResumeBtn.addEventListener('click', () => {
+  fetch(isPaused ? '/api/control/resume' : '/api/control/pause', { method: 'POST' });
+});
+stepBtn.addEventListener('click', () => {
+  fetch('/api/control/step', { method: 'POST' });
+});
 
 async function replayHistory(historyItems, done) {
   clearAllPanels();
-  // history is a mix of "sample" and "warning" entries, in original order.
+  // history is a mix of "sample", "warning", and "metric" entries, in
+  // original order.
   historyItems.forEach(item => {
     if (item.type === 'warning') {
       logLine(item.text, 'event');
+    } else if (item.type === 'metric') {
+      setAccuracy(item.traced_pct);
     } else {
       applySample(item);
     }
   });
   if (done) {
-    setStatus('drawing complete', 'accent');
+    setStatus(`drawing complete — ${accuracyValue.textContent} traced`, 'accent');
     liveDot.classList.remove('live');
   }
 }
@@ -500,17 +660,21 @@ function connect() {
       if (msg.loaded) {
         await loadStatics();
         replayHistory(msg.samples, msg.done);
+        setPaused(!!msg.paused);
         if (!msg.done && msg.samples.length) {
           setStatus('reconnected — resuming live', 'accent');
         }
       } else {
         setStatus('waiting for a photo…', null);
       }
+    } else if (msg.type === 'playstate') {
+      setPaused(msg.paused);
     } else if (msg.type === 'reset') {
       clearAllPanels();
       currentGeneration = msg.generation;
       setStatus('planning — analyzing image…', 'accent');
       liveDot.classList.remove('live');
+      setPaused(false);
     } else if (msg.type === 'sample') {
       if (!liveDot.classList.contains('live')) {
         setStatus('drawing…', 'accent');
@@ -519,10 +683,16 @@ function connect() {
       applySample(msg);
     } else if (msg.type === 'warning') {
       logLine(msg.text, 'event');
+    } else if (msg.type === 'metric') {
+      setAccuracy(msg.traced_pct);
+    } else if (msg.type === 'frame3d') {
+      arm3dImg.src = 'data:image/jpeg;base64,' + msg.image_b64;
     } else if (msg.type === 'done') {
-      setStatus('drawing complete', 'accent');
+      const finalPct = (typeof msg.traced_pct === 'number' ? msg.traced_pct : parseFloat(accuracyValue.textContent)).toFixed(1);
+      setAccuracy(parseFloat(finalPct));
+      setStatus(`drawing complete — ${finalPct}% traced`, 'accent');
       liveDot.classList.remove('live');
-      logLine('▸ drawing complete', 'event');
+      logLine(`▸ drawing complete — ${finalPct}% traced`, 'event');
     }
   };
 

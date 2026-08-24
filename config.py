@@ -31,5 +31,12 @@ APPROX_POLY_EPS_FRAC = 0.01     # fraction of contour arc length, for cv2.approx
 # --- Trajectory ---
 STEPS_PER_SEGMENT = 2
 
+# --- Live dashboard playback pacing ---
+# Draw moves (pen down) play slow and deliberate; travel moves (pen up)
+# play fast, matching how a human explaining a sketch skips the boring
+# transit and lingers on the actual line.
+DRAW_SECONDS_PER_SAMPLE = 0.06
+TRAVEL_SECONDS_PER_SAMPLE = 0.006
+
 # --- Simulation ---
 SIM_TIMESTEP = 1.0 / 240.0
