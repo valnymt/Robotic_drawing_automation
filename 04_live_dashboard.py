@@ -271,6 +271,7 @@ def playback_worker(speed: float, generation: int):
     prev_stroke_index = None
     prev_arm_point = None
     prev_pos_3d = None
+    prev_was_singular = False
 
     for i in range(total):
         if state["generation"] != generation:
@@ -303,11 +304,31 @@ def playback_worker(speed: float, generation: int):
 
         msg = _sample_to_dict(i)
         state["history"].append(msg)
+        sample = samples[i]
+
+        # Singularity warning: det(J) = L1*L2*sin(theta2) -> 0 when the
+        # arm is fully stretched (theta2=0) or fully folded (theta2=+-pi),
+        # meaning it momentarily loses a direction of motion. Only warn
+        # on the *transition* into a singular configuration, not on every
+        # sample while lingering near one, so the feed doesn't flood.
+        is_singular_now = kinematics.is_singular(sample.t1, sample.t2)
+        if is_singular_now and not prev_was_singular:
+            kind = "fully stretched" if abs(np.sin(sample.t2 / 2)) < 0.5 else "fully folded"
+            singular_msg = {
+                "type": "warning",
+                "text": (
+                    f"⚠ singularity: arm {kind} at θ2={np.degrees(sample.t2):.1f}° "
+                    f"— det(J)≈0, momentarily loses a direction of motion"
+                ),
+                "stroke_index": stroke_index,
+            }
+            state["history"].append(singular_msg)
+            broadcast_queue.put(singular_msg)
+        prev_was_singular = is_singular_now
 
         # Mirror the client's ink drawing server-side, in the same
         # ink-canvas pixel space, so the accuracy metric below is
         # comparing like-for-like against target_mask.
-        sample = samples[i]
         if sample.pen_down and prev_arm_point is not None:
             p0 = arm_to_ink_px(*prev_arm_point)
             p1 = arm_to_ink_px(msg["x"], msg["y"])
